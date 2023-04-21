@@ -1,0 +1,10 @@
+import pandas as pd
+from datetime import datetime,date
+from pandas.tseries.offsets import MonthEnd
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+
+
+data= pd.read_excel('/Users/zhande/Desktop/datacsv/9.信心因素.xlsx',header=7,parse_dates=True)
+data=data.dropna().rename(columns={'更新时间':'date',"'2023-04-03":'银行景气',"'2023-04-03.1":'贷款需求'})
