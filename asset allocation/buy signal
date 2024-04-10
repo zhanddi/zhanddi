@@ -1,0 +1,114 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import minimize
+"""
+基于两部分完成
+1.自动更新的EMA带，能够尽可能包住收盘价，在包络线以上的不买，以下的不卖，尤其是在下方时经常会跌破了胆，但是不要卖
+2.MACD和EMA的双重信号
+3.结果虽然标记了买点，但是实际效果并没有那么好，要跟止损止盈连在一起用，不能做什么比能做什么更重要
+"""
+# 加载数据
+df = pd.read_excel('/Users/zhande/Desktop/000777.SZ.xlsx')  
+df['date'] = pd.to_datetime(df['date'])
+df.set_index('date', inplace=True)
+
+
+#函数设计
+def calculate_ema(prices, span):
+    return prices.ewm(span=span, adjust=False).mean()
+
+
+def calculate_macd(prices, fast_span, slow_span):
+    fast_ema = calculate_ema(prices, fast_span)
+    slow_ema = calculate_ema(prices, slow_span)
+    return fast_ema - slow_ema
+
+
+def optimize_envelope(prices):
+    def objective(params):
+        ema_span, envelope_pct = params
+        ema = calculate_ema(prices, ema_span)
+        upper_bound = ema * (1 + envelope_pct)
+        lower_bound = ema * (1 - envelope_pct)
+        within_envelope = prices[(prices <= upper_bound) & (prices >= lower_bound)]
+        # Objective is to maximize the proportion within the envelope
+        return -len(within_envelope) / len(prices)
+
+    initial_guess = [20, 0.05]
+    bounds = [(5, 50), (0.01, 0.2)]
+    result = minimize(objective, initial_guess, bounds=bounds, method='L-BFGS-B')
+    if result.success:
+        return result.x
+    else:
+        raise ValueError("Optimization failed")
+
+
+# 运行优化以找到最佳EMA周期和包络线百分比
+optimal_params = optimize_envelope(df['close'])
+ema_span, envelope_pct = int(optimal_params[0]), optimal_params[1]
+
+# 使用找到的参数计算EMA和MACD
+ema = calculate_ema(df['close'], ema_span)
+macd_line = calculate_macd(df['close'], ema_span, 2 * ema_span)
+
+# 绘制包络线
+upper_bound = ema * (1 + envelope_pct)
+lower_bound = ema * (1 - envelope_pct)
+df['upper_bound'] = upper_bound  # 将上界存储到 DataFrame 中
+df['lower_bound'] = lower_bound
+
+
+#设置默认颜色
+df['color'] = 'blue'
+# 更新颜色列基于特定条件
+df.loc[(ema > ema.shift(1)) & (macd_line > macd_line.shift(1)) & (macd_line < 0), 'color'] = 'darkred'
+df.loc[(ema > ema.shift(1)) & (macd_line > macd_line.shift(1)) & (macd_line >= 0), 'color'] = 'pink'
+df.loc[(ema < ema.shift(1)) & (macd_line < macd_line.shift(1)) & (macd_line <= 0), 'color'] = 'lightgreen'
+df.loc[(ema < ema.shift(1)) & (macd_line < macd_line.shift(1)) & (macd_line > 0), 'color'] = 'darkgreen'
+
+
+# 检查前第4个交易日是否为darkgreen或lightgreen
+cond_4_days_ago_green = df['color'].shift(4).isin(['darkgreen', 'lightgreen'])
+
+# 检查前第3、2、1个交易日是否为darkred或pink
+cond_3_days_ago_red_or_pink = df['color'].shift(3).isin(['darkred', 'pink'])
+cond_2_days_ago_red_or_pink = df['color'].shift(2).isin(['darkred', 'pink'])
+cond_1_day_ago_red_or_pink = df['color'].shift(1).isin(['darkred', 'pink'])
+
+# 检查当前点是否为darkred或pink
+cond_today_red_or_pink = df['color'].isin(['darkred', 'pink'])
+df['within_envelope'] = (df['close'] >= df['lower_bound']) & (df['close'] <= df['upper_bound'])
+
+# 买入信号
+df['buy_signal'] = (
+    cond_4_days_ago_green &
+    cond_3_days_ago_red_or_pink &
+    cond_2_days_ago_red_or_pink &
+    cond_1_day_ago_red_or_pink &
+    cond_today_red_or_pink &
+    df['within_envelope']  # 确保买入信号同时位于包络线内
+)
+
+# 绘制
+
+#随意变更时间区间
+df = df['2015':'2017']
+plt.figure(figsize=(14, 7))
+
+# 绘制收盘价的线图
+plt.plot(df.index, df['close'], label='Close Price', color='grey', linewidth=1)
+
+# 在相同图表上绘制条件着色的点图
+plt.scatter(df.index, df['close'], color=df['color'], alpha=0.6)
+
+# 突出显示买入信号点
+plt.scatter(df[df['buy_signal']].index, df[df['buy_signal']]['close'], color='yellow', edgecolor='black', label='Buy Signal', s=100, zorder=5)
+plt.fill_between(df.index, df['lower_bound'], df['upper_bound'], color='grey', alpha=0.3, label='Envelope')
+plt.title('Stock Prices with Conditional Coloring and Buy Signals')
+plt.xlabel('Date')
+plt.ylabel('Price')
+plt.legend()
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
